@@ -59,11 +59,11 @@ def translate_text(text, api_key):
 
 
 def main():
-    api_key = os.getenv("GOOGLE_API_KEY")
+    api_key = os.getenv("GOOGLE_TRANSLATE_API_KEY")
 
     if not api_key:
-        print("❌ ERROR: GOOGLE_API_KEY not found.")
-        print("➡️  Make sure you have a .env file with GOOGLE_API_KEY set.")
+        print("❌ ERROR: GOOGLE_TRANSLATE_API_KEY not found.")
+        print("➡️  Make sure you have a .env file with GOOGLE_TRANSLATE_API_KEY set.")
         sys.exit(1)
 
     print("English → Sinhala Translator")
