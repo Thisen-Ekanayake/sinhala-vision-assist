@@ -1,105 +1,123 @@
-import base64
-import json
-import requests
-from dotenv import load_dotenv
 import os
-import wave
-import contextlib
+import sys
 import time
-import io
-import audioop
+import json
+import base64
+import queue
+import threading
+import requests
+import numpy as np
+import sounddevice as sd
+from dotenv import load_dotenv
 
+# --------------------------------------------------
+# ENV
+# --------------------------------------------------
 load_dotenv()
-
 API_KEY = os.getenv("GOOGLE_STT_API_KEY")
 assert API_KEY, "GOOGLE_STT_API_KEY not found"
 
-AUDIO_FILE = "sinhala_stt.wav"
+# --------------------------------------------------
+# Audio config
+# --------------------------------------------------
+SAMPLE_RATE = 16000
+CHANNELS = 1
+DTYPE = "int16"
 
-# Inspect WAV to determine sample rate and duration
-with contextlib.closing(wave.open(AUDIO_FILE, 'rb')) as wf:
-    sample_rate = wf.getframerate()
-    channels = wf.getnchannels()
-    sampwidth = wf.getsampwidth()
-    frames = wf.getnframes()
-    duration = frames / float(sample_rate)
+audio_queue = queue.Queue()
+recording = False
+frames = []
 
-# Determine encoding (assume LINEAR16 for common WAV files)
-encoding = "LINEAR16" if sampwidth == 2 else "ENCODING_UNSPECIFIED"
+# --------------------------------------------------
+# Audio callback
+# --------------------------------------------------
+def audio_callback(indata, frames_count, time_info, status):
+    if recording:
+        audio_queue.put(indata.copy())
 
-# Read audio bytes; convert to mono if necessary
-with contextlib.closing(wave.open(AUDIO_FILE, 'rb')) as wf:
-    frames = wf.readframes(wf.getnframes())
-    if channels > 1:
-        # convert stereo -> mono by averaging channels
-        mono_frames = audioop.tomono(frames, sampwidth, 0.5, 0.5)
-        bio = io.BytesIO()
-        with wave.open(bio, 'wb') as outw:
-            outw.setnchannels(1)
-            outw.setsampwidth(sampwidth)
-            outw.setframerate(sample_rate)
-            outw.writeframes(mono_frames)
-        audio_bytes = bio.getvalue()
-    else:
-        # read raw file bytes
-        with open(AUDIO_FILE, 'rb') as f:
-            audio_bytes = f.read()
+# --------------------------------------------------
+# Keyboard listener
+# --------------------------------------------------
+def keyboard_listener():
+    global recording, frames
+    print("\nPress 'r' to record | 's' to stop | Ctrl+C to quit\n")
 
-audio_content = base64.b64encode(audio_bytes).decode('utf-8')
+    while True:
+        key = sys.stdin.read(1)
 
-config = {
-    "encoding": encoding,
-    "sampleRateHertz": sample_rate,
-    "languageCode": "si-LK",
-    "model": "default",
-}
+        if key == "r" and not recording:
+            frames = []
+            recording = True
+            print("[REC] Recording started...")
 
-payload = {
-    "config": config,
-    "audio": {"content": audio_content},
-}
+        elif key == "s" and recording:
+            recording = False
+            print("[REC] Recording stopped")
+            break
 
-def post_sync(payload):
+# --------------------------------------------------
+# STT request
+# --------------------------------------------------
+def recognize_audio(audio_np):
+    audio_bytes = audio_np.tobytes()
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+
+    payload = {
+        "config": {
+            "encoding": "LINEAR16",
+            "sampleRateHertz": SAMPLE_RATE,
+            "languageCode": "si-LK",
+            "model": "default",
+        },
+        "audio": {
+            "content": audio_b64
+        }
+    }
+
     url = f"https://speech.googleapis.com/v1/speech:recognize?key={API_KEY}"
     resp = requests.post(url, json=payload)
-    if not resp.ok:
-        print("Request failed:", resp.status_code, resp.text)
-        resp.raise_for_status()
+    resp.raise_for_status()
     return resp.json()
 
-def post_longrunning(payload, timeout=300, poll_interval=2):
-    url = f"https://speech.googleapis.com/v1/speech:longrunningrecognize?key={API_KEY}"
-    resp = requests.post(url, json=payload)
-    if not resp.ok:
-        print("Longrunning request failed:", resp.status_code, resp.text)
-        resp.raise_for_status()
-    op = resp.json()
-    name = op.get("name") or op.get("operation")
-    if not name:
-        # older responses return the full operation object
-        return op
-    # poll operation
-    op_url = f"https://speech.googleapis.com/v1/operations/{name}?key={API_KEY}"
-    start = time.time()
-    while True:
-        r = requests.get(op_url)
-        if not r.ok:
-            print("Operation poll failed:", r.status_code, r.text)
-            r.raise_for_status()
-        j = r.json()
-        if j.get("done"):
-            return j
-        if time.time() - start > timeout:
-            raise TimeoutError("Longrunning recognition timed out")
-        time.sleep(poll_interval)
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
+def main():
+    global frames
+
+    stream = sd.InputStream(
+        samplerate=SAMPLE_RATE,
+        channels=CHANNELS,
+        dtype=DTYPE,
+        callback=audio_callback,
+    )
+
+    with stream:
+        kb_thread = threading.Thread(target=keyboard_listener, daemon=True)
+        kb_thread.start()
+
+        while kb_thread.is_alive():
+            try:
+                chunk = audio_queue.get(timeout=0.1)
+                frames.append(chunk)
+            except queue.Empty:
+                pass
+
+    if not frames:
+        print("No audio recorded.")
+        return
+
+    audio_np = np.concatenate(frames, axis=0)
+    print(f"[INFO] Captured {audio_np.shape[0] / SAMPLE_RATE:.2f}s of audio")
+
+    result = recognize_audio(audio_np)
+
+    print("\n--- Transcription ---")
+    for r in result.get("results", []):
+        print(r["alternatives"][0]["transcript"])
 
 
-if duration > 60:
-    print(f"Audio duration {duration:.1f}s > 60s, using longrunningrecognize")
-    result = post_longrunning(payload)
-else:
-    result = post_sync(payload)
-
-print("\n--- Transcription ---")
-for r in result.get("results", []):
-    print(r["alternatives"][0]["transcript"])
+if __name__ == "__main__":
+    print("Live Sinhala STT (Google REST)")
+    print("Make sure your mic is working.\n")
+    main()
