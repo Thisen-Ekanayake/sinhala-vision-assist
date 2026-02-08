@@ -69,7 +69,7 @@ Download the model (e.g. from Hugging Face) and place it there, or change `MODEL
 ### 1. Clone and enter the project
 
 ```bash
-cd /path/to/object_detection_&_stt
+cd /path/to/sinhala-vision-assist
 ```
 
 ### 2. Create a virtual environment (recommended)
@@ -174,7 +174,7 @@ python translate_en_to_si.py
 ## Project layout (relevant paths)
 
 ```text
-object_detection_&_stt/
+sinhala-vision-assist/
 ├── README.md
 ├── requirements.txt
 ├── .env.example
