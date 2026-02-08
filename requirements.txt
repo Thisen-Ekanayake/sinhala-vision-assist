@@ -1,0 +1,5 @@
+google-cloud-translate==3.15.3
+python-dotenv==1.2.1
+Flask==3.0.3
+TTS==0.21.1
+pydub
