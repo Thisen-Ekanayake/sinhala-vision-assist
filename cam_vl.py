@@ -1,12 +1,14 @@
 """
 Vision-Language assistive inference with live camera feed.
 
-- Shows webcam feed
-- Captures a frame on SPACE
-- Generates English narration using Qwen2.5-VL
-- Translates English → Sinhala
-- Sends Sinhala text to local TTS HTTP server
-- Receives WAV audio and auto-plays it
+- Shows webcam feed continuously
+- User types a question in terminal
+- On ENTER:
+    - Captures current frame
+    - Answers the user's question about the image (English)
+    - Translates English → Sinhala
+    - Sends Sinhala text to local TTS HTTP server
+    - Receives WAV audio and auto-plays it
 """
 
 import os
@@ -16,6 +18,8 @@ import tempfile
 import subprocess
 import json
 import urllib.request
+import sys
+import select
 from PIL import Image
 from transformers import (
     Qwen2_5_VLForConditionalGeneration,
@@ -64,137 +68,167 @@ processor = AutoProcessor.from_pretrained(
 )
 
 # -------------------------------------------------------------------
-# Assistive prompt (FORCE ENGLISH OUTPUT)
-# -------------------------------------------------------------------
-assistive_prompt = (
-    "You are an assistive vision system for a blind user. "
-    "Describe the most important objects or actions in front of the user. "
-    "Mention obstacles, people, or movement if present. "
-    "Keep it brief, practical, and strictly in English."
-)
-
-# -------------------------------------------------------------------
 # Config
 # -------------------------------------------------------------------
 TTS_URL = "http://localhost:8000/tts"
-API_KEY = os.getenv("GOOGLE_API_KEY")
+API_KEY = os.getenv("GOOGLE_TRANSLATE_API_KEY")
 
 if not API_KEY:
-    raise RuntimeError("GOOGLE_API_KEY not found in environment")
+    raise RuntimeError("GOOGLE_TRANSLATE_API_KEY not found in environment")
 
 os.makedirs("logs", exist_ok=True)
 
 # -------------------------------------------------------------------
-# Camera loop
+# Camera
 # -------------------------------------------------------------------
 cap = cv2.VideoCapture(0)
 
-print("Press SPACE to narrate | Press Q to quit")
+print("\nType a question and press ENTER to analyze the image.")
+print("Press Q in the camera window to quit.\n")
 
+input_buffer = ""
+
+# -------------------------------------------------------------------
+# Camera loop
+# -------------------------------------------------------------------
 while True:
     ret, frame = cap.read()
     if not ret:
         break
 
     cv2.imshow("Assistive Camera Feed", frame)
-    key = cv2.waitKey(1) & 0xFF
 
-    # Quit
-    if key == ord("q"):
+    # --------------------------------------------------
+    # Handle quit from camera window
+    # --------------------------------------------------
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
-    # Capture + narrate
-    if key == ord(" "):
-        print("\n[INFO] Capturing frame...")
+    # --------------------------------------------------
+    # Non-blocking terminal input
+    # --------------------------------------------------
+    if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+        char = sys.stdin.read(1)
 
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(rgb_frame)
+        # ENTER → run inference
+        if char == "\n":
+            question = input_buffer.strip()
+            input_buffer = ""
 
-        fd, temp_image_path = tempfile.mkstemp(suffix=".jpg")
-        os.close(fd)
-        pil_image.save(temp_image_path)
+            if not question:
+                continue
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "image": temp_image_path},
-                    {"type": "text", "text": assistive_prompt},
-                ],
-            }
-        ]
+            print(f"\n[QUESTION] {question}")
+            print("[INFO] Capturing frame and running inference...")
 
-        text = processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
+            # --------------------------------------------------
+            # Capture image
+            # --------------------------------------------------
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(rgb_frame)
 
-        image_inputs, video_inputs = process_vision_info(messages)
+            fd, temp_image_path = tempfile.mkstemp(suffix=".jpg")
+            os.close(fd)
+            pil_image.save(temp_image_path)
 
-        inputs = processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt",
-        ).to("cuda")
+            # --------------------------------------------------
+            # Build multimodal message
+            # --------------------------------------------------
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": temp_image_path},
+                        {
+                            "type": "text",
+                            "text": (
+                                "Answer the user's question about the image. "
+                                "Be concise, factual, and strictly in English.\n\n"
+                                f"Question: {question}"
+                            ),
+                        },
+                    ],
+                }
+            ]
 
-        with torch.inference_mode():
-            generated_ids = model.generate(
-                **inputs,
-                max_new_tokens=80,
-                do_sample=False,
-                use_cache=True,
+            text = processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
             )
 
-        generated_ids_trimmed = [
-            out_ids[len(in_ids):]
-            for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-        ]
+            image_inputs, video_inputs = process_vision_info(messages)
 
-        english_narration = processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False,
-        )[0].strip()
+            inputs = processor(
+                text=[text],
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                return_tensors="pt",
+            ).to("cuda")
 
-        print("English:", english_narration)
+            # --------------------------------------------------
+            # Model inference
+            # --------------------------------------------------
+            with torch.inference_mode():
+                generated_ids = model.generate(
+                    **inputs,
+                    max_new_tokens=96,
+                    do_sample=False,
+                    use_cache=True,
+                )
 
-        # --------------------------------------------------
-        # Translate EN → SI
-        # --------------------------------------------------
-        sinhala_text = translate_text(english_narration, API_KEY)
-        print("Sinhala:", sinhala_text)
+            generated_ids_trimmed = [
+                out_ids[len(in_ids):]
+                for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+            ]
 
-        # --------------------------------------------------
-        # Send to TTS server
-        # --------------------------------------------------
-        audio_path = "logs/output.wav"
+            english_answer = processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0].strip()
 
-        payload = json.dumps({"text": sinhala_text}).encode("utf-8")
-        req = urllib.request.Request(
-            TTS_URL,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+            print("English:", english_answer)
 
-        with urllib.request.urlopen(req) as resp:
-            audio_data = resp.read()
+            # --------------------------------------------------
+            # Translate EN → SI
+            # --------------------------------------------------
+            sinhala_text = translate_text(english_answer, API_KEY)
+            print("Sinhala:", sinhala_text)
 
-        with open(audio_path, "wb") as f:
-            f.write(audio_data)
+            # --------------------------------------------------
+            # Send to TTS server
+            # --------------------------------------------------
+            audio_path = "logs/output.wav"
 
-        # --------------------------------------------------
-        # Auto-play
-        # --------------------------------------------------
-        if subprocess.call(["which", "aplay"], stdout=subprocess.DEVNULL) == 0:
-            subprocess.run(["aplay", audio_path])
-        elif subprocess.call(["which", "afplay"], stdout=subprocess.DEVNULL) == 0:
-            subprocess.run(["afplay", audio_path])
+            payload = json.dumps({"text": sinhala_text}).encode("utf-8")
+            req = urllib.request.Request(
+                TTS_URL,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
 
-        os.remove(temp_image_path)
+            with urllib.request.urlopen(req) as resp:
+                audio_data = resp.read()
+
+            with open(audio_path, "wb") as f:
+                f.write(audio_data)
+
+            # --------------------------------------------------
+            # Auto-play
+            # --------------------------------------------------
+            if subprocess.call(["which", "aplay"], stdout=subprocess.DEVNULL) == 0:
+                subprocess.run(["aplay", audio_path])
+            elif subprocess.call(["which", "afplay"], stdout=subprocess.DEVNULL) == 0:
+                subprocess.run(["afplay", audio_path])
+
+            os.remove(temp_image_path)
+            print("\nType next question:")
+
+        else:
+            input_buffer += char
 
 # -------------------------------------------------------------------
 # Cleanup
