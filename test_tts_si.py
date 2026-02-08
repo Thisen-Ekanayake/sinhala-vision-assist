@@ -1,38 +1,77 @@
-import requests
-import base64
-from dotenv import load_dotenv
 import os
+import base64
+import requests
+from dotenv import load_dotenv
 
-load_dotenv()
+class SinhalaTTS:
+    """
+    Sinhala Text-to-Speech using Google Text-to-Speech REST API
+    """
 
-API_KEY = os.getenv("GOOGLE_TTS_API_KEY")
-assert API_KEY, "GOOGLE_TTS_API_KEY not found"
+    LANGUAGE_CODE = "si-LK"
+    AUDIO_ENCODING = "LINEAR16"
 
-url = (
-    "https://texttospeech.googleapis.com/v1/text:synthesize"
-    f"?key={API_KEY}"
-)
+    def __init__(self, output_path: str = "sinhala_tts.wav"):
+        # -------------------------
+        # Load environment
+        # -------------------------
+        load_dotenv()
+        self.api_key = os.getenv("GOOGLE_TTS_API_KEY")
+        assert self.api_key, "GOOGLE_TTS_API_KEY not found"
 
-payload = {
-    "input": {
-        "text": "ආයුබෝවන්, ඔබට කොහොමද?"
-    },
-    "voice": {
-        "languageCode": "si-LK",
-        "ssmlGender": "NEUTRAL"
-    },
-    "audioConfig": {
-        "audioEncoding": "LINEAR16"
-    }
-}
+        self.output_path = output_path
+        self.url = (
+            "https://texttospeech.googleapis.com/v1/text:synthesize"
+            f"?key={self.api_key}"
+        )
 
-resp = requests.post(url, json=payload)
-resp.raise_for_status()
+    # -------------------------
+    # Core TTS
+    # -------------------------
+    def synthesize(self, text: str) -> bytes:
+        payload = {
+            "input": {
+                "text": text
+            },
+            "voice": {
+                "languageCode": self.LANGUAGE_CODE,
+                "ssmlGender": "NEUTRAL"
+            },
+            "audioConfig": {
+                "audioEncoding": self.AUDIO_ENCODING
+            }
+        }
 
-audio_b64 = resp.json()["audioContent"]
-audio_bytes = base64.b64decode(audio_b64)
+        resp = requests.post(self.url, json=payload)
+        resp.raise_for_status()
 
-with open("sinhala_tts.wav", "wb") as f:
-    f.write(audio_bytes)
+        audio_b64 = resp.json()["audioContent"]
+        return base64.b64decode(audio_b64)
 
-print("Saved sinhala_tts.wav")
+    # -------------------------
+    # Callable execution
+    # -------------------------
+    def __call__(self):
+        print("\nEnter Sinhala text to convert to speech:")
+        text = input(">> ").strip()
+
+        if not text:
+            print("No text provided. Exiting.")
+            return
+
+        audio_bytes = self.synthesize(text)
+
+        with open(self.output_path, "wb") as f:
+            f.write(audio_bytes)
+
+        print(f"\n[OK] Audio saved to: {self.output_path}")
+
+
+# --------------------------------------------------
+# Executable entry point
+# --------------------------------------------------
+if __name__ == "__main__":
+    print("Sinhala Text-to-Speech (Google REST)\n")
+
+    tts = SinhalaTTS()
+    tts()
