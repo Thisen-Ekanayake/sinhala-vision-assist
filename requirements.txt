@@ -3,3 +3,5 @@ python-dotenv==1.2.1
 Flask==3.0.3
 TTS==0.21.1
 pydub
+google-cloud-speech==2.36.1
+google-cloud-texttospeech==2.34.0
