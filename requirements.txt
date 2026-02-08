@@ -1,7 +1,29 @@
+# Google Cloud
 google-cloud-translate==3.15.3
-python-dotenv==1.2.1
-Flask==3.0.3
-TTS==0.21.1
-pydub
 google-cloud-speech==2.36.1
 google-cloud-texttospeech==2.34.0
+
+# Backend / API
+Flask==3.0.3
+requests==2.32.5
+python-dotenv==1.2.1
+
+# ML / DL
+torch==2.10.0
+torchvision==0.25.0
+transformers==5.1.0
+accelerate==1.12.0
+bitsandbytes==0.49.1
+qwen-vl-utils==0.0.14
+
+# Audio / TTS
+TTS==0.21.1
+pydub==0.25.1
+sounddevice==0.5.5
+
+# Vision
+opencv-python==4.13.0.92
+pillow==12.1.0
+
+# Core
+numpy==1.26.4
