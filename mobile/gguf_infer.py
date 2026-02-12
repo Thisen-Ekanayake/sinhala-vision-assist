@@ -1,37 +1,37 @@
 import time
 from llama_cpp import Llama
 
-# path to your GGUF model
-model_path = "models/qwen2.5-0.5b-f16.gguf"
+# path to your quantized GGUF model
+model_path = "models/qwen2.5-0.5b-q4_k_m.gguf"
 
-# initialize the model
+# initialize the quantized model
 llm = Llama(
     model_path=model_path,
-    n_ctx=2048,        # context size
-    n_threads=8        # CPU threads
+    n_ctx=2048,        # context/window size
+    n_threads=8        # threads used for CPU inference
 )
 
-# prompt to run
+# the prompt you want to run
 prompt = "Explain quantum physics in simple terms"
 
-# start timing
+# start timing just before inference
 start = time.perf_counter()
 
-# model call
+# model call (text generation)
 output = llm(
     prompt,
-    max_tokens=100,
+    max_tokens=50,
     temperature=0.7,
     top_p=0.9
 )
 
-# end timing
+# end timing after inference
 end = time.perf_counter()
 
-# extract generated text
+# extract the generated text
 result_text = output["choices"][0]["text"].strip()
 
-# compute duration
+# compute the inference duration
 duration_secs = end - start
 
 # print results
