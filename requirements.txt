@@ -27,3 +27,6 @@ pillow==12.1.0
 
 # Core
 numpy==1.26.4
+
+# GGUF inference
+llama-cpp-python==0.3.16
